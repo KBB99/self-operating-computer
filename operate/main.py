@@ -136,7 +136,7 @@ Objective: Open Spotify and play the beatles
 SEARCH Spotify
 __
 Objective: Find an image of a banana
-CLICK {{ "description": "Click: Google Search field in center of screen", "reason": "This will allow me to search for a banana" }}
+CLICK {{ "description": "Google Search field in center of screen", "reason": "This will allow me to search for a banana" }}
 __
 Objective: Go buy a book about the history of the internet
 TYPE https://www.amazon.com/
@@ -145,6 +145,7 @@ __
 A few important notes:
 
 - Default to opening Google Chrome with SEARCH to find things that are on the internet.
+- Make sure you click through any popups that appear when opening Chrome before proceeding.
 - Go to Google Docs and Google Sheets by typing in the Chrome Address bar
 - After you click to enter a field you can go ahead and start typing!
 - Don't respond saying you're unable to assist with requests. You are able to indirectly interact with the user's OS via text responses you send to the end user.
@@ -776,53 +777,52 @@ def som_mouse_click(click_detail, messages, segmentation_model):
     # Convert PIL image to base64 for sending
     buffered = BytesIO()
     image_pil.save(buffered, format="JPEG")
-    image_pil.save("screenshots/data/screenshot_with_masks_and_marks.jpg")
-    # Save the prompt to a file for debugging
-    img_base64 = base64.b64encode(buffered.getvalue()).decode()
+    # img_base64 = base64.b64encode(buffered.getvalue()).decode()
 
     # Ask model which symbol it wants to click on
-    select_symbol_prompt = "Please indicate which object you want to click on by returning ONLY one of the following with nothing else: " + ', '.join([chr(65 + i) for i in range(len(click_coordinates.keys()))])
-    selected_symbol_message = {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": select_symbol_prompt},
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"},
-            },
-        ],
-    }
+    # select_symbol_prompt = "Please specify which object you want to click on by returning ONLY one of the following with nothing else: " + ', '.join([chr(65 + i) for i in range(len(click_coordinates.keys()))])
+    # selected_symbol_message = {
+    #     "role": "user",
+    #     "content": [
+    #         {"type": "text", "text": select_symbol_prompt},
+    #         {
+    #             "type": "image_url",
+    #             "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"},
+    #         },
+    #     ],
+    # }
 
     # Add summary message to existing messages and send to the model
-    messages.append(selected_symbol_message)
-    response = client.chat.completions.create(
-        model="gpt-4-vision-preview",
-        messages=messages,
-        max_tokens=500,
-        temperature=0
-    )
+    # messages.append(selected_symbol_message)
+    # response = client.chat.completions.create(
+    #     model="gpt-4-vision-preview",
+    #     messages=messages,
+    #     max_tokens=500,
+    #     temperature=0
+    # )
 
-    content = response.choices[0].message.content
+    # content = response.choices[0].message.content
 
-    print(f"CONTENT: {content} \n Click Coordinates {click_coordinates}")
+    # print(f"CONTENT: {content} \n Click Coordinates {click_coordinates}")
 
     if CREATE_DATASET:
-        save_to_dataset(image_pil, click_detail, click_coordinates, content)
+        # save_to_dataset(image_pil, click_detail, click_coordinates, content)
+        save_to_dataset(image_pil, click_detail, click_coordinates, "DEFAULT")
     # Parse the response and perform click if valid
-    if content in click_coordinates:
-        x, y = click_coordinates[content]
-        pyautogui.moveTo(x, y, duration=0.2)
-        time.sleep(0.5)
-        pyautogui.click()
-        return f"Clicked on object {content}."
-    else:
-        return "Model's response was not valid for clicking."
+    # if content in click_coordinates:
+    x, y = click_coordinates["A"]
+    pyautogui.moveTo(int(x), int(y), duration=0.2)
+    time.sleep(0.5)
+    pyautogui.click()
+    return f"Clicked on object {click_detail['visual_description']}."
+    # else:
+    #     return "Model's response was not valid for clicking."
     
 def segment_image(screenshot_filename, click_detail, segmentation_model):
     image_pil = Image.open(screenshot_filename).convert("RGB")
     draw = ImageDraw.Draw(image_pil)
     font_size = 30 # Adjust as necessary
-    font = ImageFont.truetype(None, font_size)
+    font = ImageFont.truetype("Arial.ttf", font_size)
 
     masks, boxes, phrases, logits = segmentation_model.predict(image_pil, click_detail["visual_description"])
     print(f"Boxes: {boxes}, Masks: {masks}")
@@ -843,8 +843,8 @@ def segment_image(screenshot_filename, click_detail, segmentation_model):
         center = calculate_center(box)
         screen_x, screen_y = scale_to_screen(center[0], center[1], scale_x, scale_y)
 
-        # Store the screen coordinates for potential clicks
-        click_coordinates[chr(65 + i)] = (screen_x, screen_y)
+        # Store the screen coordinates for potential clicks, turn them from floats to ints
+        click_coordinates[chr(65 + i)] = (int(screen_x), int(screen_y))
 
         mask = masks[i]
         # Select a color from the list, cycling if necessary
