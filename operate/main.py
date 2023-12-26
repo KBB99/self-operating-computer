@@ -14,7 +14,7 @@ import platform
 import Xlib.display
 import Xlib.X
 import Xlib.Xutil  # not sure if Xutil is necessary
-import google.generativeai as genai
+# import google.generativeai as genai
 from prompt_toolkit import prompt
 from prompt_toolkit.shortcuts import message_dialog
 from prompt_toolkit.styles import Style as PromptStyle
@@ -1150,7 +1150,6 @@ def main_entry():
     # Add SoM to image
     parser.add_argument(
         "-som",
-        "--set-of-marks",
         help="Activate SOM Mode",
         action="store_true",
         required=False,
