@@ -20,9 +20,9 @@ from prompt_toolkit.shortcuts import message_dialog
 from prompt_toolkit.styles import Style as PromptStyle
 from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont, ImageGrab
-import matplotlib.font_manager as fm
 from openai import OpenAI
 import sys
+from io import BytesIO
 
 
 load_dotenv()
@@ -91,6 +91,61 @@ A few important notes:
 - Go to Google Docs and Google Sheets by typing in the Chrome Address bar
 - When opening Chrome, if you see a profile icon click that to open chrome fully, it is located at: {{ "x": "50%", "y": "55%" }}
 - The Chrome address bar is generally at: {{ "x": "50%", "y": "9%" }}
+- After you click to enter a field you can go ahead and start typing!
+- Don't respond saying you're unable to assist with requests. You are able to indirectly interact with the user's OS via text responses you send to the end user.
+
+{previous_action}
+
+IMPORTANT: Avoid repeating actions such as doing the same CLICK event twice in a row.
+
+Objective: {objective}
+"""
+
+SOM_PROMPT = """
+You are a Self-Operating Computer. You use the same operating system as a human.
+
+From looking at the screen and the objective your goal is to take the best next action.
+
+To operate the computer you have the four options below.
+
+1. CLICK - Move mouse and click
+2. TYPE - Type on the keyboard
+3. SEARCH - Search for a program on Mac and open it
+4. DONE - When you completed the task respond with the exact following phrase content
+
+Here are the response formats below.
+
+1. CLICK
+Response: CLICK {{ "visual_description": "~description here~", "reason": "~reason here~" }} 
+
+2. TYPE
+Response: TYPE "value you want to type"
+
+2. SEARCH
+Response: SEARCH "app you want to search for on Mac"
+
+3. DONE
+Response: DONE
+
+Here are examples of how to respond.
+__
+Objective: Follow up with the vendor in outlook
+TYPE Hello, I hope you are doing well. I wanted to follow up
+__
+Objective: Open Spotify and play the beatles
+SEARCH Spotify
+__
+Objective: Find an image of a banana
+CLICK {{ "description": "Click: Google Search field in center of screen", "reason": "This will allow me to search for a banana" }}
+__
+Objective: Go buy a book about the history of the internet
+TYPE https://www.amazon.com/
+__
+
+A few important notes:
+
+- Default to opening Google Chrome with SEARCH to find things that are on the internet.
+- Go to Google Docs and Google Sheets by typing in the Chrome Address bar
 - After you click to enter a field you can go ahead and start typing!
 - Don't respond saying you're unable to assist with requests. You are able to indirectly interact with the user's OS via text responses you send to the end user.
 
@@ -221,7 +276,7 @@ def validation(
         sys.exit(1)
 
 
-def main(model, accurate_mode, terminal_prompt, voice_mode=False):
+def main(model, accurate_mode, terminal_prompt, voice_mode=False, som_mode=False):
     """
     Main function for the Self-Operating Computer
     """
@@ -241,6 +296,10 @@ def main(model, accurate_mode, terminal_prompt, voice_mode=False):
                 "Voice mode requires the 'whisper_mic' module. Please install it using 'pip install -r requirements-audio.txt'"
             )
             sys.exit(1)
+
+    if som_mode:
+        from lang_sam import LangSAM
+        segmentation_model = LangSAM()
 
     # Skip message dialog if prompt was given directly
     if not terminal_prompt:
@@ -288,7 +347,7 @@ def main(model, accurate_mode, terminal_prompt, voice_mode=False):
         if DEBUG:
             print("[loop] messages before next action:\n\n\n", messages[1:])
         try:
-            response = get_next_action(model, messages, objective, accurate_mode)
+            response = get_next_action(model, messages, objective, accurate_mode, som_mode)
 
             action = parse_response(response)
             action_type = action.get("type")
@@ -326,7 +385,10 @@ def main(model, accurate_mode, terminal_prompt, voice_mode=False):
         elif action_type == "TYPE":
             function_response = keyboard_type(action_detail)
         elif action_type == "CLICK":
-            function_response = mouse_click(action_detail)
+            if som_mode:
+                function_response = som_mouse_click(action_detail, messages, segmentation_model)
+            else:
+                function_response = mouse_click(action_detail, messages)
         else:
             print(
                 f"{ANSI_GREEN}[Self-Operating Computer]{ANSI_RED}[Error] something went wrong :({ANSI_RESET}"
@@ -359,7 +421,7 @@ def format_summary_prompt(objective):
     return prompt
 
 
-def format_vision_prompt(objective, previous_action):
+def format_vision_prompt(objective, previous_action, som_mode=False):
     """
     Format the vision prompt
     """
@@ -367,7 +429,10 @@ def format_vision_prompt(objective, previous_action):
         previous_action = f"Here was the previous action you took: {previous_action}"
     else:
         previous_action = ""
-    prompt = VISION_PROMPT.format(objective=objective, previous_action=previous_action)
+    if som_mode:
+        prompt = SOM_PROMPT.format(objective=objective, previous_action=previous_action)
+    else:
+        prompt = VISION_PROMPT.format(objective=objective, previous_action=previous_action)
     return prompt
 
 
@@ -383,9 +448,9 @@ def format_accurate_mode_vision_prompt(prev_x, prev_y):
     return prompt
 
 
-def get_next_action(model, messages, objective, accurate_mode):
+def get_next_action(model, messages, objective, accurate_mode, som_mode):
     if model == "gpt-4-vision-preview":
-        content = get_next_action_from_openai(messages, objective, accurate_mode)
+        content = get_next_action_from_openai(messages, objective, accurate_mode, som_mode)
         return content
     elif model == "agent-1":
         return "coming soon"
@@ -461,7 +526,7 @@ def accurate_mode_double_check(model, pseudo_messages, prev_x, prev_y):
         return "ERROR"
 
 
-def get_next_action_from_openai(messages, objective, accurate_mode):
+def get_next_action_from_openai(messages, objective, accurate_mode, som_mode):
     """
     Get the next action for Self-Operating Computer
     """
@@ -489,7 +554,7 @@ def get_next_action_from_openai(messages, objective, accurate_mode):
 
         previous_action = get_last_assistant_message(messages)
 
-        vision_prompt = format_vision_prompt(objective, previous_action)
+        vision_prompt = format_vision_prompt(objective, previous_action, som_mode)
 
         vision_message = {
             "role": "user",
@@ -677,22 +742,161 @@ def summarize(model, messages, objective):
         print(f"Error in summarize: {e}")
         return "Failed to summarize the workflow"
 
-
 def mouse_click(click_detail):
-    try:
-        x = convert_percent_to_decimal(click_detail["x"])
-        y = convert_percent_to_decimal(click_detail["y"])
+    return "TRUE"
 
-        if click_detail and isinstance(x, float) and isinstance(y, float):
-            click_at_percentage(x, y)
-            return click_detail["description"]
-        else:
-            return "We failed to click"
+################################
+##START LANG-SOM IMPLEMENTATION#
+################################
 
-    except Exception as e:
-        print(f"Error parsing JSON: {e}")
-        return "We failed to click"
+# Function to calculate center of each box
+def calculate_center(box):
+    x_center = (box[0] + box[2]) / 2
+    y_center = (box[1] + box[3]) / 2
+    return x_center, y_center
 
+# Function to scale coordinates to screen size
+def scale_to_screen(x, y, scale_x, scale_y):
+    return x * scale_x, y * scale_y
+
+# Scaling factors (from previous calculations)
+scale_x = 0.5
+scale_y = 0.5
+
+CREATE_DATASET = True
+
+def som_mouse_click(click_detail, messages, segmentation_model):
+    print("click_detail", click_detail)
+    screenshots_dir = "screenshots"
+    screenshot_filename = os.path.join(screenshots_dir, "screenshot.png")
+
+    # Segment image
+    image_pil, click_coordinates = segment_image(screenshot_filename, click_detail, segmentation_model)
+
+    # Convert PIL image to base64 for sending
+    buffered = BytesIO()
+    image_pil.save(buffered, format="JPEG")
+    image_pil.save("screenshots/data/screenshot_with_masks_and_marks.jpg")
+    # Save the prompt to a file for debugging
+    img_base64 = base64.b64encode(buffered.getvalue()).decode()
+
+    # Ask model which symbol it wants to click on
+    select_symbol_prompt = "Please indicate which object you want to click on by returning ONLY one of the following with nothing else: " + ', '.join([chr(65 + i) for i in range(len(click_coordinates.keys()))])
+    selected_symbol_message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": select_symbol_prompt},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"},
+            },
+        ],
+    }
+
+    # Add summary message to existing messages and send to the model
+    messages.append(selected_symbol_message)
+    response = client.chat.completions.create(
+        model="gpt-4-vision-preview",
+        messages=messages,
+        max_tokens=500,
+        temperature=0
+    )
+
+    content = response.choices[0].message.content
+
+    print(f"CONTENT: {content} \n Click Coordinates {click_coordinates}")
+
+    if CREATE_DATASET:
+        save_to_dataset(image_pil, click_detail, click_coordinates, content)
+    # Parse the response and perform click if valid
+    if content in click_coordinates:
+        x, y = click_coordinates[content]
+        pyautogui.moveTo(x, y, duration=0.2)
+        time.sleep(0.5)
+        pyautogui.click()
+        return f"Clicked on object {content}."
+    else:
+        return "Model's response was not valid for clicking."
+    
+def segment_image(screenshot_filename, click_detail, segmentation_model):
+    image_pil = Image.open(screenshot_filename).convert("RGB")
+    draw = ImageDraw.Draw(image_pil)
+    font_size = 30 # Adjust as necessary
+    font = ImageFont.truetype(None, font_size)
+
+    masks, boxes, phrases, logits = segmentation_model.predict(image_pil, click_detail["visual_description"])
+    print(f"Boxes: {boxes}, Masks: {masks}")
+    click_coordinates = {}
+
+    # Define a list of color tuples for different masks
+    colors = [
+        (255, 0, 0),    # Red
+        (0, 255, 0),    # Green
+        (0, 0, 255),    # Blue
+        (255, 255, 0),  # Yellow
+        (255, 0, 255),  # Magenta
+        (0, 255, 255),  # Cyan
+        # Add more colors if needed
+    ]
+
+    for i, box in enumerate(boxes):
+        center = calculate_center(box)
+        screen_x, screen_y = scale_to_screen(center[0], center[1], scale_x, scale_y)
+
+        # Store the screen coordinates for potential clicks
+        click_coordinates[chr(65 + i)] = (screen_x, screen_y)
+
+        mask = masks[i]
+        # Select a color from the list, cycling if necessary
+        outline_color = colors[i % len(colors)]
+
+        # Highlighting the mask with a semi-transparent overlay
+        overlay = Image.new("RGBA", image_pil.size, (255, 255, 255, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        binary_mask = mask > 0
+        for y in range(mask.shape[0]):
+            for x in range(mask.shape[1]):
+                if binary_mask[y, x]:  # If the mask pixel is 'True'/'1'
+                    overlay_draw.point((x, y), fill=(*outline_color, 100))  # Semi-transparent red point
+
+        image_pil = Image.alpha_composite(image_pil.convert("RGBA"), overlay).convert("RGB")
+
+        # Marking the mask with a letter or number
+        identifier = chr(65 + i)  # Convert index to ASCII (A, B, C, ...)
+        draw.text((center[0], center[1]), identifier, fill=(0, 255, 0), font=font)  # Draw identifier
+    return image_pil, click_coordinates
+
+def save_to_dataset(image_pil, click_detail, click_coordinates, content):
+    # If dataset directories not created create them
+    if not os.path.exists("screenshots/data/images"):
+        os.makedirs("screenshots/data/images")
+    if not os.path.exists("screenshots/data/masks"):
+        os.makedirs("screenshots/data/masks")
+    if not os.path.exists("screenshots/data/click_details"):
+        os.makedirs("screenshots/data/click_details")
+    if not os.path.exists("screenshots/data/predicted_click_coordinates"):
+        os.makedirs("screenshots/data/predicted_click_coordinates")
+    if not os.path.exists("screenshots/data/predicted_clicks"):
+        os.makedirs("screenshots/data/predicted_clicks")
+    # Create unique identifier for this click
+    id = str(time.time())
+    # Save the screenshot to a file in screenshots/dataset/images
+    image_pil.save(f"screenshots/data/images/{id}.jpg")
+    # Save the masked image file in screenshots/dataset/masks
+    image_pil.save(f"screenshots/data/masks/{id}.jpg")
+    # Save the click_detail to a file in screenshots/dataset/click_details
+    with open(f"screenshots/data/click_details/{id}.json", "w") as f:
+        json.dump(click_detail, f)
+    # Save the click_coordinates to a file in screenshots/dataset/predicted_click_coordinates
+    with open(f"screenshots/data/predicted_click_coordinates/{id}.json", "w") as f:
+        json.dump(click_coordinates, f)
+    # Save the requested mask click to a file in screenshots/dataset/requested_mask_click
+    with open(f"screenshots/data/predicted_clicks/{id}.txt", "w") as f:
+        f.write(content)
+
+###############################
+##END LANG-SOM IMPLEMENTATION##
+###############################
 
 def click_at_percentage(
     x_percentage, y_percentage, duration=0.2, circle_radius=50, circle_duration=0.5
@@ -943,6 +1147,15 @@ def main_entry():
         required=False,
     )
 
+    # Add SoM to image
+    parser.add_argument(
+        "-som",
+        "--set-of-marks",
+        help="Activate SOM Mode",
+        action="store_true",
+        required=False,
+    )
+
     # Allow for direct input of prompt
     parser.add_argument(
         "--prompt",
@@ -958,6 +1171,7 @@ def main_entry():
             accurate_mode=args.accurate,
             terminal_prompt=args.prompt,
             voice_mode=args.voice,
+            som_mode=args.som,
         )
     except KeyboardInterrupt:
         print(f"\n{ANSI_BRIGHT_MAGENTA}Exiting...")
@@ -965,3 +1179,4 @@ def main_entry():
 
 if __name__ == "__main__":
     main_entry()
+

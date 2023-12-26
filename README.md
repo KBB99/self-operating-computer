@@ -144,6 +144,34 @@ Run with voice mode
 operate --voice
 ```
 
+### Set of Marks Mode `--som`
+The framework adds object detection and segmentation using the [lang-segment-anything library](https://github.com/luca-medeiros/lang-segment-anything) to improve click accuracy. Try it out by following the instructions below.
+
+Note: This mode is currently only compatible with <=Python3.9. To set up the venv with Python3.9, run:
+```
+python3.9 -m venv venv
+```
+
+Reinstall other packages in Python3.9
+```
+pip install -r requirements.txt
+```
+
+Install the additional `requirements-som.txt`
+```
+pip install -r requirements-som.txt
+```
+
+Install self-operating-computer
+```
+pip install .
+```
+
+Run with set of marks mode
+```
+operate --set-of-marks
+```
+
 ## Contributions are Welcomed!:
 
 If you want to contribute yourself, see [CONTRIBUTING.md](https://github.com/OthersideAI/self-operating-computer/blob/main/CONTRIBUTING.md).
