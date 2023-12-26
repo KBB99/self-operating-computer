@@ -152,6 +152,12 @@ Note: This mode is currently only compatible with <=Python3.9. To set up the ven
 python3.9 -m venv venv
 ```
 
+Alternatively set up an env with anaconda:
+```
+conda create -n som python=3.9
+conda activate som
+```
+
 Reinstall other packages in Python3.9
 ```
 pip install -r requirements.txt
@@ -160,6 +166,11 @@ pip install -r requirements.txt
 Install the additional `requirements-som.txt`
 ```
 pip install -r requirements-som.txt
+```
+
+If you're getting an error install torch first and then reinstall the requirements-som.txt
+```
+pip install torch
 ```
 
 Install self-operating-computer
