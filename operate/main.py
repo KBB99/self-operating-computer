@@ -2,6 +2,7 @@
 Self-Operating Computer
 """
 import os
+import boto3
 import time
 import base64
 import json
@@ -62,7 +63,7 @@ Response: CLICK {{ "x": "percent", "y": "percent", "description": "~description 
 Note that the percents work where the top left corner is "x": "0%" and "y": "0%" and the bottom right corner is "x": "100%" and "y": "100%"
 
 2. TYPE
-Response: TYPE "value you want to type"
+Response: TYPE "value you want to type. NEVER sorround the value with quotes just type the value directly"
 
 2. SEARCH
 Response: SEARCH "app you want to search for on Mac"
@@ -136,7 +137,7 @@ Objective: Open Spotify and play the beatles
 SEARCH Spotify
 __
 Objective: Find an image of a banana
-CLICK {{ "description": "Google Search field in center of screen", "reason": "This will allow me to search for a banana" }}
+CLICK {{ "description": "Safari address bar at the top of the screen that says 'github.com'", "reason": "This will allow me to search for a banana" }}
 __
 Objective: Go buy a book about the history of the internet
 TYPE https://www.amazon.com/
@@ -298,9 +299,9 @@ def main(model, accurate_mode, terminal_prompt, voice_mode=False, som_mode=False
             )
             sys.exit(1)
 
-    if som_mode:
-        from lang_sam import LangSAM
-        segmentation_model = LangSAM()
+    # if som_mode:
+        # from lang_sam import LangSAM
+        # segmentation_model = LangSAM()
 
     # Skip message dialog if prompt was given directly
     if not terminal_prompt:
@@ -387,7 +388,7 @@ def main(model, accurate_mode, terminal_prompt, voice_mode=False, som_mode=False
             function_response = keyboard_type(action_detail)
         elif action_type == "CLICK":
             if som_mode:
-                function_response = som_mouse_click(action_detail, messages, segmentation_model)
+                function_response = som_mouse_click(action_detail, messages)
             else:
                 function_response = mouse_click(action_detail, messages)
         else:
@@ -766,57 +767,69 @@ scale_y = 0.5
 
 CREATE_DATASET = True
 
-def som_mouse_click(click_detail, messages, segmentation_model):
+def som_mouse_click(click_detail, messages):
     print("click_detail", click_detail)
     screenshots_dir = "screenshots"
     screenshot_filename = os.path.join(screenshots_dir, "screenshot.png")
+    
+    # Convert screenshot image to base64 for sending
+    with open(screenshot_filename, "rb") as img_file:
+        img_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+        image_bytes = base64.b64decode(img_base64)
+        image_object = Image.open(BytesIO(image_bytes))
 
-    # Segment image
-    image_pil, click_coordinates = segment_image(screenshot_filename, click_detail, segmentation_model)
+    textract_response = get_textract_layout_response(image_bytes)
 
-    # Convert PIL image to base64 for sending
-    buffered = BytesIO()
-    image_pil.save(buffered, format="JPEG")
-    # img_base64 = base64.b64encode(buffered.getvalue()).decode()
+    word_to_coordinates = {}
+    for block in textract_response["Blocks"]:
+        if block["BlockType"] == "WORD":
+            bbox = block["Geometry"]["BoundingBox"]
+            x1, y1, x2, y2 = bbox["Left"], bbox["Top"], bbox["Left"] + bbox["Width"], bbox["Top"] + bbox["Height"]
+            center = ((x1 + x2) / 2) * image_object.width, ((y1 + y2) / 2) * image_object.height
+            word_to_coordinates[block["Text"]] = center
 
-    # Ask model which symbol it wants to click on
-    # select_symbol_prompt = "Please specify which object you want to click on by returning ONLY one of the following with nothing else: " + ', '.join([chr(65 + i) for i in range(len(click_coordinates.keys()))])
-    # selected_symbol_message = {
-    #     "role": "user",
-    #     "content": [
-    #         {"type": "text", "text": select_symbol_prompt},
-    #         {
-    #             "type": "image_url",
-    #             "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"},
-    #         },
-    #     ],
-    # }
+    # Ask model which text it wants to click on
+    select_text_prompt = f"Here's what we're trying to do: {click_detail}. Please specify which object you want to click on by picking the text associated with it. For instance to select the safari address bar you would select whatever text is currently within it, i.e. github.com. Text is in order of appereance from left, right, up, down. Return the text and nothing else: " + '\n'.join(word_to_coordinates.keys())
+    selected_text_message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": select_text_prompt},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"},
+            },
+        ],
+    }
 
     # Add summary message to existing messages and send to the model
-    # messages.append(selected_symbol_message)
-    # response = client.chat.completions.create(
-    #     model="gpt-4-vision-preview",
-    #     messages=messages,
-    #     max_tokens=500,
-    #     temperature=0
-    # )
+    messages.append(selected_text_message)
+    response = client.chat.completions.create(
+        model="gpt-4-vision-preview",
+        messages=messages,
+        max_tokens=500,
+        temperature=0
+    )
 
-    # content = response.choices[0].message.content
+    content = response.choices[0].message.content
 
-    # print(f"CONTENT: {content} \n Click Coordinates {click_coordinates}")
+    # Get the center of the selected text
+    print("\n\n content", content)
+    print("\n\n word_to_coordinates", ','.join(word_to_coordinates.keys()))
+    selected_text = content.split("\n")[0]
+    print("\n\n selected_text", selected_text)
+    try:
+        x, y = word_to_coordinates[selected_text]
+    except:
+        selected_text = selected_text.split(" ")[0]
+        x, y = word_to_coordinates[selected_text]
+    print("\n\n x, y", x, y)
 
-    if CREATE_DATASET:
-        # save_to_dataset(image_pil, click_detail, click_coordinates, content)
-        save_to_dataset(image_pil, click_detail, click_coordinates, "DEFAULT")
-    # Parse the response and perform click if valid
-    # if content in click_coordinates:
-    x, y = click_coordinates["A"]
-    pyautogui.moveTo(int(x), int(y), duration=0.2)
-    time.sleep(0.5)
+    pyautogui.moveTo(int(x/2), int(y/2), duration=0.2)
+    time.sleep(1.5)
     pyautogui.click()
-    return f"Clicked on object {click_detail['visual_description']}."
-    # else:
-    #     return "Model's response was not valid for clicking."
+    time.sleep(1.5)
+    messages.pop()
+    return f"Clicked on text {click_detail['visual_description']}."
     
 def segment_image(screenshot_filename, click_detail, segmentation_model):
     image_pil = Image.open(screenshot_filename).convert("RGB")
@@ -1119,6 +1132,20 @@ def convert_percent_to_decimal(percent_str):
     except ValueError as e:
         print(f"Error converting percent to decimal: {e}")
         return None
+    
+def get_textract_layout_response(image_bytes):
+    """
+    Calls Amazon Textract to get the layout response for the image.
+
+    :param image_bytes: The image bytes to send to Amazon Textract.
+    :return: The Amazon Textract layout response.
+    """
+    textract_client = boto3.client("textract")
+    response = textract_client.analyze_document(
+        Document={"Bytes": image_bytes}, FeatureTypes=["LAYOUT"]
+    )
+
+    return response
 
 
 def main_entry():
